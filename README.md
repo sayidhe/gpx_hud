@@ -36,12 +36,12 @@ pip install opencv-python numpy
 ### 脚本文件
 - **`gpx_hud_overlay.py`** - 主脚本，生成 HUD 视频
 - **`analyze_gpx.py`** - 数据分析工具，查看 GPX 数据范围和统计
+- **`find_summit.py`** - 找到最高海拔点及其前后 200 米的片段参数
 
 ### 数据文件
 - **`hike.gpx`** - GPX 徒步数据文件
 
 ### 文档
-- **`CONFIG.md`** - 详细配置和使用说明
 - **`QUICKSTART.md`** - 快速开始指南
 
 ---
@@ -58,6 +58,54 @@ python3 analyze_gpx.py
 - 海拔统计（最低、最高、平均）
 - 心率统计（如果有的话）
 - 时间范围索引参考表
+
+### 第 1.5 步：找到最高登顶点（可选）
+
+如果你想生成最高海拔点附近的 HUD 视频，可以使用 `find_summit.py`：
+
+```bash
+python3 find_summit.py
+```
+
+**输出示例**：
+```
+总数据点数: 14164
+
+最高海拔点:
+  海拔: 1963.4 米
+  数据点索引: 6591
+  时间: 2025-10-05T03:48:13Z
+  累计距离: 3.84 km
+
+前后200米范围:
+  开始点索引: 6082
+  结束点索引: 7209
+  开始时间: 2025-10-05T03:39:44Z
+  结束时间: 2025-10-05T03:58:31Z
+  前距离: 199.4 米
+  后距离: 199.5 米
+  数据点数: 1128
+  时长: 0:18:47
+  相对开始时间偏移: 1:41:25
+  相对结束时间偏移: 2:00:12
+
+这段的统计信息:
+  海拔范围: 1906.0 - 1963.4 米
+  海拔上升: 57.4 米
+  心率范围: 76 - 139 BPM
+  平均心率: 101 BPM
+
+生成HUD的命令:
+python3 gpx_hud_overlay.py hike.gpx -s 6082 -e 7209 -o summit_hud.mov
+或者按时间:
+python3 gpx_hud_overlay.py hike.gpx -st 01:41:25 -et 02:00:12 -o summit_hud.mov
+```
+
+**说明**：
+- `find_summit.py` 自动找到 GPX 文件中的最高海拔点
+- 计算该点前后各 200 米的范围
+- 提供数据点索引和时间偏移
+- 输出直接可用的生成命令
 
 ### 第 2 步：生成 HUD 视频
 
@@ -115,34 +163,22 @@ python3 gpx_hud_overlay.py <gpx_file> [参数]
 
 ### 可选参数
 
-#### 时间范围选择
-- `-st, --start-time HH:MM:SS` - 开始时间（例：`02:30:00`）
-- `-et, --end-time HH:MM:SS` - 结束时间（例：`03:00:00`）
+| 参数 | 说明 | 示例 |
+|------|------|------|
+| `-o, --output` | 输出视频文件名 | `overlay.mov` |
+| `-s, --start` | 开始数据点索引 | `0` |
+| `-e, --end` | 结束数据点索引 | `5000` |
+| `-st, --start-time` | 开始时间 (HH:MM:SS) | `02:30:00` |
+| `-et, --end-time` | 结束时间 (HH:MM:SS) | `02:45:00` |
+| `-w, --width` | 视频宽度像素 | `1920` |
+| `--height` | 视频高度像素 | `1080` |
+| `-f, --fps` | 帧率 | `30` |
+| `--real-time` | 视频时长 = 实际徒步时长 | `--real-time` |
+| `--no-map` | 隐藏路线地图 | `--no-map` |
 
-#### 数据点范围选择
-- `-s, --start INDEX` - 起始数据点索引（例：`1000`）
-- `-e, --end INDEX` - 结束数据点索引（例：`5000`）
-
-#### 视频参数
-- `-w, --width PIXELS` - 视频宽度（默认：1920）
-- `--height PIXELS` - 视频高度（默认：1080）
-- `-f, --fps FPS` - 帧率（默认：30）
-- `--real-time` - 生成视频时长与实际徒步时长相同（自动计算 fps）
-- `--no-map` - 隐藏路线地图，只显示数据面板
-- `-o, --output FILE` - 输出文件名（默认：`overlay.mov`）
-
----
-
-## 📈 HUD 显示内容
+### HUD 显示内容
 
 生成的视频右下角显示 4 项实时徒步数据：
-
-```
-║ HR: 120 BPM      │
-║ ALT: 1456m       │ 02:35:40
-║ DIST: 4.23 km    │
-```
-
 - **HR**: 心率（BPM，如果 GPX 有数据）
 - **ALT**: 当前海拔（米）
 - **DIST**: 累计距离（公里）
@@ -151,8 +187,6 @@ python3 gpx_hud_overlay.py <gpx_file> [参数]
 ---
 
 ## 🔍 实用示例
-
-### 示例 1：生成山顶冲刺段
 ```bash
 # 根据分析结果，从数据点 8000 到 10000
 python3 gpx_hud_overlay.py hike.gpx -s 8000 -e 10000 -o summit_dash.mov
@@ -191,6 +225,27 @@ python3 gpx_hud_overlay.py hike.gpx --real-time -o full_realtime.mov
 # 生成 2:00 到 3:00 的 1 小时视频
 python3 gpx_hud_overlay.py hike.gpx -st 02:00:00 -et 03:00:00 --real-time -o hour_segment.mov
 ```
+
+### 示例 8：生成最高海拔点周边视频 ⛰️
+```bash
+# 生成最高海拔点（1963.4m）前后各 200 米的片段
+# 数据点索引方式（更精确）
+python3 gpx_hud_overlay.py hike.gpx -s 6082 -e 7209 -o summit_hud.mov
+
+# 或者用时间偏移方式（01:41:25 到 02:00:12）
+python3 gpx_hud_overlay.py hike.gpx -st 01:41:25 -et 02:00:12 -o summit_hud.mov
+
+# 结合实时时长模式，生成 18 分 47 秒的视频
+python3 gpx_hud_overlay.py hike.gpx -s 6082 -e 7209 --real-time -o summit_hud_realtime.mov
+```
+
+**登顶片段统计**：
+- **最高海拔**: 1963.4 米
+- **片段范围**: 前 199.4m + 后 199.5m
+- **数据点数**: 1,128 个
+- **时间长度**: 18 分 47 秒
+- **海拔变化**: 1906.0m ~ 1963.4m（上升 57.4m）
+- **平均心率**: 101 BPM（范围 76-139）
 
 ---
 

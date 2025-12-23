@@ -84,7 +84,9 @@ def analyze_gpx(gpx_file: str):
             time_only = time_str.split('T')[1].split('Z')[0]
             
             if i % 120 == 0:  # 每 2 分钟
-                print(f"数据点 {i:>6d}: {time_only}  (索引: {i})")
+                ele_elem = point.find('gpx:ele', ns)
+                ele = float(ele_elem.text) if ele_elem is not None else 0
+                print(f"数据点 {i:>6d}: {time_only}  海拔: {ele:7.1f}m  (索引: {i})")
     
     print(f"\n{'='*60}\n")
     
