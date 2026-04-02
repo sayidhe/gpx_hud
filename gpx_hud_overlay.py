@@ -21,6 +21,19 @@ except ImportError:
     sys.exit(1)
 
 
+LOCAL_TIMEZONE = timezone(timedelta(hours=8))
+
+
+def parse_gpx_time(time_str: str) -> datetime:
+    """解析 GPX 的 UTC 时间字符串"""
+    return datetime.fromisoformat(time_str.replace('Z', '+00:00'))
+
+
+def format_local_hms(time_str: str) -> str:
+    """将 GPX UTC 时间格式化为 UTC+8 的 HH:MM:SS"""
+    return parse_gpx_time(time_str).astimezone(LOCAL_TIMEZONE).strftime('%H:%M:%S')
+
+
 class GPXParser:
     """GPX 文件解析器"""
     
@@ -251,7 +264,12 @@ class HUDOverlayGenerator:
             return False
         
         print(f"处理 {len(selected_points)} 个数据点...")
-        print(f"时间范围: {selected_points[0]['time']} 到 {selected_points[-1]['time']}")
+        if selected_points[0]['time'] and selected_points[-1]['time']:
+            start_time_local = format_local_hms(selected_points[0]['time'])
+            end_time_local = format_local_hms(selected_points[-1]['time'])
+            print(f"时间范围(UTC+8): {start_time_local} 到 {end_time_local}")
+        else:
+            print(f"时间范围: {selected_points[0]['time']} 到 {selected_points[-1]['time']}")
         
         # 使用 ffmpeg 生成视频
         # 准备管道命令
@@ -275,9 +293,7 @@ class HUDOverlayGenerator:
             for i, point in enumerate(selected_points):
                 # 将 UTC 时间转换为 UTC+8 时区
                 if point['time']:
-                    utc_time = datetime.fromisoformat(point['time'].replace('Z', '+00:00'))
-                    cst_time = utc_time.astimezone(timezone(timedelta(hours=8)))
-                    time_str = cst_time.strftime('%H:%M:%S')
+                    time_str = format_local_hms(point['time'])
                 else:
                     time_str = "00:00:00"
                 
@@ -324,8 +340,8 @@ def main():
     parser.add_argument('-o', '--output', default='overlay.mov', help='输出视频文件')
     parser.add_argument('-s', '--start', type=int, default=0, help='开始数据点索引')
     parser.add_argument('-e', '--end', type=int, help='结束数据点索引')
-    parser.add_argument('-st', '--start-time', help='开始时间 (HH:MM:SS)')
-    parser.add_argument('-et', '--end-time', help='结束时间 (HH:MM:SS)')
+    parser.add_argument('-st', '--start-time', help='开始时间 (HH:MM:SS, UTC+8)')
+    parser.add_argument('-et', '--end-time', help='结束时间 (HH:MM:SS, UTC+8)')
     parser.add_argument('-w', '--width', type=int, default=1920, help='视频宽度')
     parser.add_argument('--height', type=int, default=1080, help='视频高度')
     parser.add_argument('-f', '--fps', type=int, default=30, help='帧率')
@@ -348,13 +364,14 @@ def main():
     
     if args.start_time or args.end_time:
         # 根据时间搜索索引
+        start_time_found = False
         for i, point in enumerate(trackpoints):
             if point['time']:
-                pt_time = point['time'].split('T')[1].split('Z')[0]
+                pt_time = format_local_hms(point['time'])
                 
-                if args.start_time and pt_time >= args.start_time:
+                if args.start_time and not start_time_found and pt_time >= args.start_time:
                     start_idx = i
-                    args.start_time = None  # 标记为已找到，避免重复覆盖
+                    start_time_found = True
                 
                 if args.end_time and pt_time >= args.end_time:
                     end_idx = i
