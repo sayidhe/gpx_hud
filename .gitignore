@@ -79,3 +79,7 @@ Thumbs.db
 *.log
 .env
 .env.local
+
+# GPX input files (keep the folder itself)
+gpx/*
+!gpx/.gitkeep
