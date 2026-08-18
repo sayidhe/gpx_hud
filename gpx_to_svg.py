@@ -19,6 +19,9 @@ GPX_NS = 'http://www.topografix.com/GPX/1/1'
 GPXTPX_NS = 'http://www.garmin.com/xmlschemas/TrackPointExtension/v1'
 NS = {'gpx': GPX_NS, 'gpxtpx': GPXTPX_NS}
 
+GPX_DIR = 'gpx'
+OUTPUT_DIR = 'output'
+
 # 绿-黄-红配色表的锚点 (t, (r, g, b))
 COLOR_STOPS = [
     (0.00, (34, 197, 94)),
@@ -40,6 +43,15 @@ def colormap(t: float) -> str:
     return f'#{COLOR_STOPS[-1][1][0]:02x}{COLOR_STOPS[-1][1][1]:02x}{COLOR_STOPS[-1][1][2]:02x}'
 
 
+def resolve_gpx_path(gpx_file: str) -> str:
+    if os.path.exists(gpx_file):
+        return gpx_file
+    candidate = os.path.join(GPX_DIR, gpx_file)
+    if os.path.exists(candidate):
+        return candidate
+    sys.exit(f'找不到 GPX 文件: {gpx_file} (也尝试了 {candidate})')
+
+
 def parse_trackpoints(gpx_file: str):
     tree = ET.parse(gpx_file)
     root = tree.getroot()
@@ -57,11 +69,48 @@ def parse_trackpoints(gpx_file: str):
         hr_elem = pt.find('.//gpxtpx:hr', NS)
         hr = float(hr_elem.text) if hr_elem is not None else None
 
-        points.append({'lat': lat, 'lon': lon, 'ele': ele, 'speed': speed, 'hr': hr})
+        time_elem = pt.find('gpx:time', NS)
+        time_str = time_elem.text if time_elem is not None else None
+
+        points.append({'lat': lat, 'lon': lon, 'ele': ele, 'speed': speed, 'hr': hr, 'time': time_str})
 
     if not points:
         raise ValueError(f'{gpx_file} 中没有找到 <trkpt> 数据点')
     return points
+
+
+def haversine_m(lat1, lon1, lat2, lon2) -> float:
+    r = 6371000.0
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(a))
+
+
+def derive_speed_from_positions(points):
+    """当 GPX 没有显式 speed 字段时, 用相邻点的经纬度和时间差反推速度 (m/s)"""
+    from datetime import datetime
+
+    times = [
+        datetime.fromisoformat(p['time'].replace('Z', '+00:00')) if p['time'] else None
+        for p in points
+    ]
+    if all(t is None for t in times):
+        return False
+
+    for i in range(1, len(points)):
+        if times[i] is None or times[i - 1] is None:
+            continue
+        dt = (times[i] - times[i - 1]).total_seconds()
+        if dt <= 0:
+            continue
+        dist = haversine_m(points[i - 1]['lat'], points[i - 1]['lon'], points[i]['lat'], points[i]['lon'])
+        points[i]['speed'] = dist / dt
+
+    if len(points) > 1 and points[1]['speed'] is not None:
+        points[0]['speed'] = points[1]['speed']
+    return True
 
 
 def smooth(values, window: int):
@@ -238,16 +287,20 @@ def render_png(svg_path: str, png_path: str, width: float, height: float, transp
 def main():
     parser = argparse.ArgumentParser(description='将 GPX 路线渲染为带颜色的 SVG')
     parser.add_argument('gpx_file', nargs='?', default='route_2026-07-20_5.45pm.gpx',
-                         help='输入 GPX 文件路径')
-    parser.add_argument('-o', '--output', default=None, help='输出 SVG 文件路径')
+                         help=f'输入 GPX 文件路径, 若找不到会自动到 {GPX_DIR}/ 下查找')
+    parser.add_argument('-o', '--output', default=None,
+                         help=f'输出文件路径; 也可传 "svg" 或 "png" 作为简写, 表示用默认命名, '
+                              f'放在 {OUTPUT_DIR}/ 下并导出该格式 '
+                              f'(默认: {OUTPUT_DIR}/<文件名>_<color-by>.svg)')
     parser.add_argument('--color-by', choices=['elevation', 'speed', 'hr', 'progress'],
                          default='elevation', help='按什么指标给路线上色 (默认: elevation)')
     parser.add_argument('--width', type=float, default=1200, help='SVG 宽度 (默认: 1200)')
     parser.add_argument('--height', type=float, default=1200, help='SVG 高度 (默认: 1200)')
     parser.add_argument('--padding', type=float, default=40, help='边距 (默认: 40)')
     parser.add_argument('--stroke-width', type=float, default=4, help='线宽 (默认: 4)')
-    parser.add_argument('--background', default='#111111',
-                         help='背景色, 传 "transparent" 可生成透明背景 (默认: #111111)')
+    parser.add_argument('--background', default=None,
+                         help='背景色, 传 "transparent" 可生成透明背景 '
+                              '(默认: 输出 PNG 时为 transparent, 否则为 #111111)')
     parser.add_argument('--legend', action='store_true', help='绘制颜色图例 (默认不绘制)')
     parser.add_argument('--smooth-window', type=int, default=5,
                          help='颜色数值的滑动平均窗口, 0 为不平滑 (默认: 5)')
@@ -257,31 +310,50 @@ def main():
                          help='额外通过 headless Chrome 导出同名 PNG')
     args = parser.parse_args()
 
-    output = args.output or (args.gpx_file.rsplit('.', 1)[0] + f'_{args.color_by}.svg')
+    gpx_path = resolve_gpx_path(args.gpx_file)
+    basename = os.path.splitext(os.path.basename(gpx_path))[0]
 
-    points = parse_trackpoints(args.gpx_file)
+    if args.output in (None, 'svg', 'png'):
+        ext = args.output or 'svg'
+        output = os.path.join(OUTPUT_DIR, f'{basename}_{args.color_by}.{ext}')
+    else:
+        output = args.output
+    os.makedirs(os.path.dirname(output) or '.', exist_ok=True)
+
+    want_png = args.png or output.lower().endswith('.png')
+    svg_output = output if output.lower().endswith('.svg') else \
+        os.path.join(os.path.dirname(output), basename + f'_{args.color_by}.svg')
+    png_output = output if output.lower().endswith('.png') else \
+        output.rsplit('.', 1)[0] + '.png'
+
+    background = args.background
+    if background is None:
+        background = 'transparent' if output.lower().endswith('.png') else '#111111'
+
+    points = parse_trackpoints(gpx_path)
 
     if args.color_by == 'speed' and all(p['speed'] is None for p in points):
-        sys.exit('该 GPX 文件不包含 speed 数据, 无法按速度上色')
+        if not derive_speed_from_positions(points):
+            sys.exit('该 GPX 文件不包含 speed 数据, 也没有可用于反推速度的时间戳')
+        print('该 GPX 文件不含 speed 字段, 已根据经纬度和时间戳反推速度')
     if args.color_by == 'hr' and all(p['hr'] is None for p in points):
         sys.exit('该 GPX 文件不包含心率数据, 无法按心率上色')
 
     coords = project(points, args.width, args.height, args.padding)
     svg = build_svg(
         points, coords, args.color_by, args.width, args.height,
-        args.stroke_width, args.background, args.legend,
+        args.stroke_width, background, args.legend,
         args.smooth_window, args.clip_percentile,
     )
 
-    with open(output, 'w', encoding='utf-8') as f:
+    with open(svg_output, 'w', encoding='utf-8') as f:
         f.write(svg)
 
-    print(f'已生成: {output}')
+    print(f'已生成: {svg_output}')
     print(f'数据点数: {len(points)}  上色依据: {args.color_by}')
 
-    if args.png:
-        png_output = output.rsplit('.', 1)[0] + '.png'
-        render_png(output, png_output, args.width, args.height, args.background == 'transparent')
+    if want_png:
+        render_png(svg_output, png_output, args.width, args.height, background == 'transparent')
         print(f'已生成: {png_output}')
 
 

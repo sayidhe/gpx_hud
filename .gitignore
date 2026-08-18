@@ -83,3 +83,5 @@ Thumbs.db
 # GPX input files (keep the folder itself)
 gpx/*
 !gpx/.gitkeep
+output/*
+!output/.gitkeep
